@@ -1,0 +1,208 @@
+---
+title: "Point Pattern Analysis Methods for Health Data"
+author: "Kevin Hu"
+date: "08/05/2020"
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    fig_caption: yes
+    number_sections: yes
+    theme: readable
+    toc: yes
+  pdf_document:
+    toc: no
+  word_document:
+    toc: no
+bibliography: library_fixed.bib
+header-includes: 
+  - \setlength{\parindent}{10pt}
+link-citations: yes
+csl: nature.csl
+biblio-style: nature
+
+---
+
+<!-- set fig caption font size -->
+<style type="text/css">
+.caption {
+    font-size: small;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, message = F, warning = F)
+# require("GISTools")
+# require("sf")
+# pts <- st_read("D:\\point analysis\\point_demo\\pts_selected.shp")
+# van <- st_read("D:\\point analysis\\point_demo\\city-boundary.shp")
+# parcel <- st_read("D:\\point analysis\\point_demo\\parcel_centroid.shp")
+```
+
+# Introduction  
+
+In Geographical Information System (GIS), point data is used to represent __discrete__ features. Points can symbolize not only places (e.g., buildings, facilities) but also abstract locations such as events or samples in scientific researches. For example, ecologists often model tree samples in a study area as point datasets. The spatial pattern of the points may help the researcher to discover the linkage between the environment and the ecological processes of interest.
+  
+Health data are __discrete__ in nature. Health conditions and disease status are all assessed upon individuals. The places where people live, work, or visit (especially health care services visits) in conjunction with their health status are ideal for assembling a point dataset in GIS. The dataset would contain geographic coordinates (the place) and attributes (age, sex, and health variables) for each point. Similar to ecological studies, the spatial point pattern may provide valuable insight into disease causation and transmission processes. A classic example would be John Snow’s work on the cholera outbreak in London in 1854[@Caplan2020].  
+	
+However, it is difficult to obtain such individual-level health data for confidential issues. Health authorities hold the data and may grant access only if the research topic met their priorities, e.g., on current disease outbreaks or public health emergency events. Therefore, studies using point-based health data are relatively rare. Previous spatial epidemiology/ health geography studies often use data aggregated to areal units, i.e., census tracts, counties. No doubt that aggregated data lack the granularity to pinpoint pathogen locations or investigate infectious disease transmission.   
+  
+The situation that public health researchers may have to compromise data’s granularity for availability may change in the coming years after the COVID19 pandemic. The pandemic is drawing a tremendous amount of people’s attention, which would probably be enough to let the health authorities loosen their data access requirements. Also, failures in stopping COVID19 from spreading will stimulate many research interests in contagious disease transmission. One can speculate that there would be a surge of public health researches using point-based spatial data.
+  
+As the demand for point pattern analysis rise, this paper revisits some of the most commonly used spatial analysis methods for point data. The methods are grouped by their positions in a general analytic process: identify-describe-explain.  Also, R code examples using a synthetic dataset are provided.   
+
+# Synthetic data
+
+The data used in the following code examples are synthesized from public data for demonstration purposes only. It simulates a health dataset collected from 1000 people random sample from the City of Vancouver’s population. The points are property parcel centroids in the city, representing home locations. The original property parcel polygon data is downloaded from the city’s open data portal, and the centroid points are then generated in ArcGIS Pro. As the land parcels almost cover the entire city, a straight random sample from all the centroids would probably result in a random distribution, which is not desired for method illustration purposes. To induce clustering, one thousand points (n = 1000) are randomly selected *from the first five thousand records* (Figure 1). Binary variables, disease status (diseased = 1, healthy = 0) and sex, are added by random number generation with a uniform distribution. Also, the age variable is calculated using a normal distribution (mean = 30 and standard deviation = 15).
+
+```{r figs1, fig.cap="\\label{fig:figs}Figure 1. Distribution of the selected property parcel centroids in Vancouver. The original centroids are set to 10% transparent to display overlaps.", fig.height=6, fig.width=9, results='hide'}
+#mapping using 'tmap' package
+#load required packages
+require("sf")
+require("tmap")
+require("tmaptools")
+require("OpenStreetMap") #May need Java installation to load this package
+
+#load data layers (in shapefile format, available at )
+pts <- st_read("D:\\GIS Project\\point analysis\\point_demo\\pts_selected.shp") #selected points
+van <- st_read("D:\\GIS Project\\point analysis\\point_demo\\city-boundary.shp") #Vancouver boundary line
+parcel <- st_read("D:\\GIS Project\\point analysis\\point_demo\\parcel_centroid.shp") #all parcel centroid
+van_poly <- st_read("D:\\GIS Project\\point analysis\\point_demo\\city_boundary_poly.shp") #Vancouver boundary polygon
+
+#get Esri's world light gray canvas basemap using the extent of the vancouver boundary layer
+osm_van <- read_osm(van, ext = 1.2, type = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}')
+#plot the basemap layer as static image first
+tm_shape(osm_van) + 
+  tm_rgb() +
+#plot the second layer: city boundary line 
+  tm_shape(van) + 
+  tm_lines("darkgrey", lwd = 2) +
+#plot the third layer: parcel centroids
+  tm_shape(parcel, name = "Property parcel centroid") +
+  tm_dots("seagreen1", size = 0.1, alpha = 0.1) +
+#plot the forth layer: selected points
+  tm_shape(pts, "Selected points") + 
+  tm_dots("royalblue", size = 0.1, alpha = 1) + 
+  tm_layout(frame = F) + 
+#add manual legend
+  tm_legend(position = c("left","bottom"), frame = F) + 
+  tm_add_legend(type = "symbol", labels = "Selected points", shape = 16, size = 0.5, col = "royalblue") + 
+  tm_add_legend(type = "symbol", labels = "Property parcel centroid", shape = 16, size = 0.5, col = "seagreen1") +
+  tm_add_legend(type = "line", labels = "City of Vancouver boundary", lwd = 2, col = "darkgrey") + 
+#north arrow
+  tm_compass(position = c("left","top"), size = 1, color.dark = "grey40", color.light = "grey40", text.color = "grey40") + 
+#scale bar
+  tm_scale_bar(breaks = c(0,1,2,3), color.dark = "grey40") 
+  
+
+
+```
+
+
+# Point pattern methods
+
+Many method grouping schemas exist in different texts. Some grouped by sampling method (population data-sample data[@Fortin2005]). While, some others grouped by a sequence of analytic approach: preliminary testing-descriptive statistics-modeling[@Diggle2013]. The latter is, perhaps, more effective from a user perspective as methods could be capable of handling mulitiple data types but are almost always designed for a particular analytic objective. This paper will simplify the sequential schema, in plain language, into three stages: identifying, describing, and explaining the pattern. Classic methods (not exhaustive) will then be categorized by the stage which fits their output. Summaries of methods’ objectives, theory basis, assumptions, and limitations will be given, along with R code examples.
+
+## Identifying patterns
+
+In this stage, the location of the points is of primary interest, rather than attributes associated with the points. The goal is to differentiate between random patterns and cluster/disperse patterns. Methods in this category usually compute a test statistic from the data and compare it to an expected value for a theoretical random pattern (a.k.a., Complete Spatial Randomness or Poisson point process).
+
+
+### Diggle's Refined Nearest Neighbour Analysis (completed up to here)
+
+#### Summary[@Diggle1979;@Fortin2005, pp. 36-37]
+  * Objective: Test for Complete Spatial Randomness (CSR)  
+      + $H_0$: The point pattern is random.  
+      + $H_1$: The pattern is not random. The sign of the test statitstic indicates clustering (-) or dispersion (+).
+
+  * Prerequisites: The data is __a complete census of all events__ in the study area, and the events are located independently.
+  
+  * Description:
+    + This method is based on the nearest neighbour distance (NND). It requires the user to specify a range of distance $w$, and the number of bins (e.g., every 10 meters from 10 to 100 meters).    
+    + For each specified distance $w_i$, the proportion of points that nnd is less than $w_i$ is denoted as a function $G(w)=\frac{n \mid _{nnd \le w_{i}}}{N-n_{edge}}$. The $G$ function is an approximation of the distribution function of NND. Note that the points ($n_{edge}$) that are close to the boundary (i.e., the distance between the point and the nearest boundary is less than $w_i$) are excluded from the proportion calculation (visually equal to shrink the study area inward by $w_i$). Thus, __edge correction is not required __.   
+    + Under CSR, the theoretical value for G is $E[G(w_i)]=1-e^{-\lambda\pi w_{i}^{2}}$, where $\lambda$ is the point intensity within the study area. Then, a test statistic $d_w$ can be calculate by the maximum difference between the theoretical and observed $G$s over the range of $w$: $d_w=max|E[G(w)]-G(w)|$   
+    + Monte Carlo simulation can evaluate the test statistic. $d_w$s can be computed from $n$ simulated patterns. The p-value is the probability of having simulated $d_w$ more extreme than the one from the data: $p = \frac{n \mid _{d_{sim}>d_{obs}}+1}{n+1}$ 
+    + This method has two other variations. The $G$ function uses NND between two events. One variation, the $F$ function can be computed in the same way as $G$ but using NND between one point in an arbitrary grid and an event. The test statistic $d_w$ calculated based on the $G$ is more effective against clustering, while its counterpart using $F$ is more effective against dispersion. $d_w=max|F(w)-G(w)|$ is another variation, which performs as a compromise between the other two in terms of effectiveness.
+
+  * Limitation: The result is a single number for the entire area, which implies that the process of interest needs to be stationary over the study area.
+ 
+#### Example 
+Assume that the synthetic dataset was all illegal drug overdose cases in Vancouver in 2018. We want to know whether the cases are randomly distributed. If the pattern is not random, further investigations are required.
+
+ 
+
+```{r, fig.cap="\\label{fig:figs}Figure 2. The synthetic data is transformed and plot in UTM zone 10 projections for distance calculations in meter. In this example for refined nearest neighbour analysis, the points are assumed to be all illegal drug overdose cases in Vancouver in 2018."}
+#load required package
+require("splancs")
+
+#transfrom the points and Vancouver boundary polygon into UTM zone 10 projection for distance calculation in meters
+pts_utm <- st_transform(pts, "+proj=utm +zone=10 +datum=WGS84 +units=m")
+van_poly_utm <- st_transform(van_poly, "+proj=utm +zone=10 +datum=WGS84 +units=m")
+#extract coordinates from the two layers as separate dataframes
+pts_rnna <- as.points(st_coordinates(pts_utm)[,c(1,2)])
+poly_rnna <- as.points(st_coordinates(van_poly_utm)[,c(1,2)])
+#plot the data in UTM coordinates
+polymap(poly_rnna, ylab = "Northing (m)", xlab = "Easting (m)")
+pointmap(pts_rnna, pch = 16, cex = 0.5, add = T)
+```
+
+Firstly, we need to define the range for $w$. Let's calucate the NNDs between every pair of points and get the summary statistics: 
+
+```{r}
+#calculate and sumarize all NNDs 
+nndist_pts <- as.data.frame(nndistG(pts_rnna))
+summary(nndist_pts$dists)
+```
+
+A range from 5 to 1550 m is suffix to reproduce the entire NND distribution.
+
+```{r, fig.cap="\\label{fig:figs}Figure 3. (a) Departure from complete spatial randomness over the specified distance range. The sign of y-aix  indicates clustering (-) or dispersion (+). (b) A visualization highlighting the magnitude of departure from complete spatial randomness (CSR). The dash line represents the G function under CSR, whilt the solid line is the G function calculated from the data.", fig.width= 9}
+#create a sequence of distances w
+w <- seq(5,1550,length=30)
+#calculate the observed G(w)
+g_est <- Ghat(pts_rnna,w)
+#calculate the theorectical G(w)
+g_expect <- Fzero(pdense(pts_rnna,poly_rnna), w)
+#compute the test statistic dw
+d_w <- max(abs(g_expect-g_est))
+#plot graphs for interpretation of result
+par(mfrow=c(1,2),mai=c(1.0,0.6,1.0,0.6),cex=0.7)
+plot(w,g_expect-g_est, type = "l", ylab = "Theoretical G - Estimated G", xlab = "Distance (m)", sub = "(a)")
+plot(g_est, g_expect, type = "l", ylab = "Theoretical G", xlab = "Estimated G", sub = "(b)")
+lines(c(0,1), c(0,1), lty = 2)
+```
+
+In Figure 3,  it can be observed that the data greatly departs from CSR in both figures, and, in (a), the pattern is highly clustered within 100 m radius of each point. We can not conclude whether the departure is statistically significant at this point. Let's calculate a p-value using Monte Carlo simulation:
+
+```{r}
+#Monte Carlo simulation for 1000 runs
+for (i in 1000) {
+  pts_sim <- csr(poly_rnna, npts(pts_rnna)) #generate a n-point CSR pattern within the boundary
+  #compute the test statistic dw 
+  g_sim <- Ghat(pts_sim, w)
+  g_exp_sim <- Fzero(pdense(pts_sim,poly_rnna),w)
+  d_sim <- max(abs(g_exp_sim-g_sim))
+  d_w <- c(d_w,d_sim) #the first element in the list d_w is the one for the data
+}
+#compute the p-value
+p <- rank(d_w)[1]/(1000+1)
+p
+```
+
+As the p-value < 0.05, we reject the null hypothesis at the chosen 0.05 alpha level. The spatial pattern of the data is not random. Clustering exists based on Figure 3(a).
+
+### Ripley's K
+
+## Describing patterns
+
+### Global and local Moran's I
+
+### Variogram
+
+### Kernal density estimation
+
+## Explaining patterns
+
+### spatial modeling methods
+
+# Reference
